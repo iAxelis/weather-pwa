@@ -1,69 +1,192 @@
+"use client";
+
 import Image from "next/image";
+import { useEffect, useState, useSyncExternalStore } from "react";
+import InstallPrompt from "./components/InstallPrompt";
+import { getWeatherByCity, getWeatherByCoords } from "@/lib/weather";
+import "./page.css";
+
+function subscribeToWeatherCache(onChange) {
+  window.addEventListener("storage", onChange);
+  return () => window.removeEventListener("storage", onChange);
+}
+
+function getWeatherCacheSnapshot() {
+  return localStorage.getItem("last_weather");
+}
 
 export default function Home() {
+  const [city, setCity] = useState("");
+  const [weather, setWeather] = useState(null);
+  const [error, setError] = useState("");
+  const [loading, setLoading] = useState(false);
+  const cachedWeather = useSyncExternalStore(
+    subscribeToWeatherCache,
+    getWeatherCacheSnapshot,
+    () => null,
+  );
+  let cachedWeatherData = null;
+  let cacheError = "";
+
+  if (cachedWeather) {
+    try {
+      cachedWeatherData = JSON.parse(cachedWeather);
+    } catch {
+      cacheError = "No se pudieron cargar los datos guardados del clima.";
+    }
+  }
+  const displayedWeather = weather ?? cachedWeatherData;
+
+  useEffect(() => {
+    if (cacheError) {
+      localStorage.removeItem("last_weather");
+    }
+  }, [cacheError]);
+
+  const executeFetch = async (apiCall) => {
+    setLoading(true);
+    setError("");
+
+    try {
+      const data = await apiCall();
+      setWeather(data);
+      localStorage.setItem("last_weather", JSON.stringify(data));
+    } catch (fetchError) {
+      setError(fetchError.message || "Error al obtener datos");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleSearch = (event) => {
+    event.preventDefault();
+    if (!city.trim()) return;
+
+    executeFetch(() => getWeatherByCity(city.trim()));
+  };
+
+  const handleGeoLocation = () => {
+    if (!navigator.geolocation) {
+      setError("Tu navegador no ofrece acceso a la ubicación.");
+      return;
+    }
+
+    if (!window.isSecureContext) {
+      setError(
+        "Para usar tu ubicación, abre la app mediante HTTPS o desde localhost.",
+      );
+      return;
+    }
+
+    setError("");
+    setLoading(true);
+    navigator.geolocation.getCurrentPosition(
+      ({ coords }) => {
+        executeFetch(() => getWeatherByCoords(coords.latitude, coords.longitude));
+      },
+      (locationError) => {
+        setLoading(false);
+
+        if (locationError.code === locationError.PERMISSION_DENIED) {
+          setError(
+            "No se permitió el acceso a tu ubicación. Habilita Ubicación en los permisos de este sitio en tu navegador y vuelve a intentarlo.",
+          );
+        } else if (locationError.code === locationError.POSITION_UNAVAILABLE) {
+          setError(
+            "No se pudo determinar tu ubicación. Activa los servicios de ubicación de tu dispositivo e inténtalo de nuevo.",
+          );
+        } else {
+          setError(
+            "La ubicación tardó demasiado en responder. Comprueba la señal e inténtalo de nuevo.",
+          );
+        }
+      },
+      { enableHighAccuracy: false, timeout: 15000, maximumAge: 300000 },
+    );
+  };
+
   return (
-    <div className="flex flex-col flex-1 items-center justify-center bg-zinc-50 font-sans dark:bg-black">
-      <main className="flex flex-1 w-full max-w-3xl flex-col items-center justify-between py-32 px-16 bg-white dark:bg-black sm:items-start">
-        <Image
-          className="dark:invert h-5 w-[100px]"
-          src="/next.svg"
-          alt="Next.js logo"
-          width={100}
-          height={20}
-          priority
-        />
-        <div className="flex flex-col items-center gap-6 text-center sm:items-start sm:text-left">
-          <h1 className="max-w-xs text-3xl font-semibold leading-10 tracking-tight text-black dark:text-zinc-50">
-            To get started, edit the{" "}
-            <code className="rounded bg-black/[.06] px-1.5 py-0.5 font-mono text-[0.9em] dark:bg-white/[.08]">
-              page.js
-            </code>{" "}
-            file.
-          </h1>
-          <p className="max-w-md text-lg leading-8 text-zinc-600 dark:text-zinc-400">
-            Looking for a starting point or more instructions? Head over to{" "}
-            <a
-              href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Templates
-            </a>{" "}
-            or the{" "}
-            <a
-              href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Learning
-            </a>{" "}
-            center.
-          </p>
-        </div>
-        <div className="flex flex-col gap-4 text-base font-medium sm:flex-row">
-          <a
-            className="flex h-12 w-full items-center justify-center gap-2 rounded-full bg-foreground px-5 text-background transition-colors hover:bg-[#383838] dark:hover:bg-[#ccc] md:w-[158px]"
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
+    <main className="weather-page">
+      <header className="weather-header">
+        <h1 className="weather-title">WeatherPWA</h1>
+        <InstallPrompt />
+      </header>
+
+      <section className="weather-search">
+        <form onSubmit={handleSearch} className="weather-search-form">
+          <input
+            type="text"
+            placeholder="Ejemplo: Oaxaca, Madrid..."
+            aria-label="Buscar ciudad"
+            value={city}
+            onChange={(event) => setCity(event.target.value)}
+            className="weather-input"
+          />
+          <button
+            type="submit"
+            disabled={loading}
+            className="weather-button"
           >
+            Buscar
+          </button>
+        </form>
+
+        <button
+          onClick={handleGeoLocation}
+          disabled={loading}
+          className="weather-location-button"
+        >
+          Usar mi ubicación actual
+        </button>
+        <p className="location-help">
+          Al continuar, tu navegador te pedirá permiso para acceder a tu
+          ubicación.
+        </p>
+      </section>
+
+      {loading && (
+        <p role="status" className="weather-status">
+          Cargando datos del clima...
+        </p>
+      )}
+      {(error || cacheError) && (
+        <p role="alert" className="weather-error">
+          {error || cacheError}
+        </p>
+      )}
+
+      {displayedWeather && !loading && (
+        <article className="weather-card">
+          <h2 className="weather-city">
+            {displayedWeather.name}, {displayedWeather.sys.country}
+          </h2>
+          <div className="weather-summary">
             <Image
-              className="dark:invert h-[14px] w-4"
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={16}
-              height={14}
+              src={`https://openweathermap.org/img/wn/${displayedWeather.weather[0].icon}@2x.png`}
+              alt={displayedWeather.weather[0].description}
+              width={100}
+              height={100}
+              className="weather-icon"
             />
-            Deploy Now
-          </a>
-          <a
-            className="flex h-12 w-full items-center justify-center rounded-full border border-solid border-black/[.08] px-5 transition-colors hover:border-transparent hover:bg-black/[.04] dark:border-white/[.145] dark:hover:bg-[#1a1a1a] md:w-[158px]"
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Documentation
-          </a>
-        </div>
-      </main>
-    </div>
+            <span className="weather-temperature">
+              {Math.round(displayedWeather.main.temp)}°C
+            </span>
+          </div>
+          <p className="weather-description">
+            {displayedWeather.weather[0].description}
+          </p>
+          <div className="weather-details">
+            <div className="weather-detail">
+              Humedad:{" "}
+              <strong>{displayedWeather.main.humidity}%</strong>
+            </div>
+            <div className="weather-detail">
+              Viento:{" "}
+              <strong>{displayedWeather.wind.speed} m/s</strong>
+            </div>
+          </div>
+        </article>
+      )}
+    </main>
   );
 }
